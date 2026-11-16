@@ -1,6 +1,9 @@
 #include <ncurses.h>
 #include <string>
 #include <iostream>
+#include<fstream>
+#include<vector>
+
 
 void init_window() {
     initscr();
@@ -19,6 +22,20 @@ void init_window() {
         init_pair(2, 1, -1);
         init_pair(3, COLOR_BLACK, -1);
     }
+}
+
+void load_words(std::vector<std::string>& word_list, const std::string& filepath) {
+    std::string word;
+    std::ifstream file(filepath);
+
+    if (!file.is_open()) {
+        std::cerr << "Error: Could not open " << filepath << "\n";
+        return;
+    }
+
+    while (std::getline(file, word)) {
+        word_list.push_back(word);
+    }    
 }
 
 WINDOW* create_header(std::string heading) {
@@ -95,7 +112,17 @@ WINDOW* create_stats() {
 
 int main()
 {
+    std::vector<std::string> word_list;
+    word_list.reserve(1000);
+
+    std::string filepath = "data/word_list.csv";
     std::string heading = "TTYper - Terminal Based Typing Practice and Test";
+
+    load_words(word_list, filepath);
+
+    if (word_list.empty()) {
+        return 1;
+    }
 
     init_window();
 
