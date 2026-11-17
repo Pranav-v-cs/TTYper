@@ -73,6 +73,46 @@ void load_words(std::vector<std::string> &word_list, const std::string &filepath
     }
 }
 
+void update_menu(WINDOW *menu, const std::vector<int> &options, int selected_idx)
+{
+    werase(menu);
+    box(menu, 0, 0);
+
+    int col = 2;
+    mvwprintw(menu, 1, col, "Words: ");
+    col += 7;
+
+    for (size_t i = 0; i < options.size(); ++i)
+    {
+        if (static_cast<int>(i) == selected_idx)
+        {
+            wattron(menu, COLOR_PAIR(3) | A_BOLD | A_REVERSE);
+            mvwprintw(menu, 1, col, " %d ", options[i]);
+            wattroff(menu, COLOR_PAIR(3) | A_BOLD | A_REVERSE);
+        }
+        else
+        {
+            wattron(menu, A_DIM);
+            mvwprintw(menu, 1, col, " %d ", options[i]);
+            wattroff(menu, A_DIM);
+        }
+        col += std::to_string(options[i]).length() + 3;
+    }
+
+    // Right-aligned hint for toggling word counts
+    int width = getmaxx(menu);
+    const char *hint = "LEFT/RIGHT or 1-4: Change Words";
+    int hint_col = width - static_cast<int>(std::string(hint).length()) - 2;
+    if (hint_col > col + 2)
+    {
+        wattron(menu, A_DIM);
+        mvwprintw(menu, 1, hint_col, "%s", hint);
+        wattroff(menu, A_DIM);
+    }
+
+    wrefresh(menu);
+}
+
 void update_stats(WINDOW *stats, float wpm, float acc, double time, bool finished = false)
 {
     werase(stats);
@@ -101,7 +141,7 @@ void update_stats(WINDOW *stats, float wpm, float acc, double time, bool finishe
         mvwprintw(stats, 1, 2, "Typing...");
 
         int len = std::snprintf(right_buf, sizeof(right_buf),
-                                "| WPM: %.2f WPM | Acc: %.2f%% | Time: %.2fs | TAB: Restart | ESC: Quit",
+                                "WPM: %.2f | Acc: %.2f%% | Time: %.2fs | TAB: Restart | ESC: Quit",
                                 wpm, acc, time);
         int right_col = width - len - 2;
         if (right_col > 12)
@@ -125,26 +165,19 @@ WINDOW *create_header(const std::string &heading)
     return header;
 }
 
-WINDOW *create_stats()
+bool run_test(WINDOW *body, WINDOW *menu, WINDOW *stats, const std::vector<std::string> &word_list,
+              const std::vector<int> &word_options, int &selected_idx)
 {
-    WINDOW *stats = newwin(3, COLS - 5, LINES - 5, 2);
-    refresh();
-    update_stats(stats, 0.0f, 0.0f, 0.0);
-    return stats;
-}
-
-bool run_test(WINDOW *body, WINDOW *stats, const std::vector<std::string> &word_list)
-{
-    const int body_height = (LINES - 10) / 2;
-    const int body_width = COLS - 5;
+    const int body_width = getmaxx(body);
     const int row_lb = 2, col_lb = 4, col_ub = body_width - 4;
-    const int word_count = 10;
+    const int word_count = word_options[selected_idx];
 
     std::vector<std::string> body_content;
     get_random_words(body_content, word_list, word_count);
 
     werase(body);
     box(body, 0, 0);
+    update_menu(menu, word_options, selected_idx);
     update_stats(stats, 0.0f, 0.0f, 0.0);
 
     int row = row_lb, col = col_lb;
@@ -186,6 +219,30 @@ bool run_test(WINDOW *body, WINDOW *stats, const std::vector<std::string> &word_
     float wpm = 0.0f, accuracy = 0.0f;
     double elapsed_time = 0.0;
 
+    auto handle_menu_toggle = [&](int ch) -> bool {
+        int n = static_cast<int>(word_options.size());
+        if (ch == KEY_LEFT)
+        {
+            selected_idx = (selected_idx - 1 + n) % n;
+            return true;
+        }
+        if (ch == KEY_RIGHT)
+        {
+            selected_idx = (selected_idx + 1) % n;
+            return true;
+        }
+        if (ch >= '1' && ch <= '4')
+        {
+            int idx = ch - '1';
+            if (idx < n && idx != selected_idx)
+            {
+                selected_idx = idx;
+                return true;
+            }
+        }
+        return false;
+    };
+
     int ch;
     while (cursor < cells.size())
     {
@@ -195,9 +252,9 @@ bool run_test(WINDOW *body, WINDOW *stats, const std::vector<std::string> &word_
         {
             return false;
         }
-        if (ch == '\t')
+        if (ch == '\t' || handle_menu_toggle(ch))
         {
-            return true;
+            return true; // Immediately restart with the newly selected word count
         }
 
         if (ch == KEY_BACKSPACE || ch == 127 || ch == '\b')
@@ -263,6 +320,7 @@ bool run_test(WINDOW *body, WINDOW *stats, const std::vector<std::string> &word_
         wrefresh(body);
     }
 
+    // Post-test prompt: allow toggling word count, restarting, or quitting
     while (true)
     {
         ch = getch();
@@ -270,7 +328,7 @@ bool run_test(WINDOW *body, WINDOW *stats, const std::vector<std::string> &word_
         {
             return false;
         }
-        if (ch == '\t' || ch == '\n' || ch == KEY_ENTER)
+        if (ch == '\t' || ch == '\n' || ch == KEY_ENTER || handle_menu_toggle(ch))
         {
             return true;
         }
@@ -293,15 +351,22 @@ int main()
 
     init_window();
 
-    WINDOW *header = create_header(heading);
-    WINDOW *stats = create_stats();
-    WINDOW *body = newwin((LINES - 10) / 2, COLS - 5, 5, 2);
+    const std::vector<int> word_options = {10, 25, 50, 100};
+    int selected_idx = 0;
 
-    while (run_test(body, stats, word_list))
-        ;
+    WINDOW *header = create_header(heading);
+    WINDOW *body = newwin(LINES - 14, COLS - 5, 5, 2);
+    WINDOW *menu = newwin(3, COLS - 5, LINES - 8, 2);
+    WINDOW *stats = newwin(3, COLS - 5, LINES - 5, 2);
+    refresh();
+
+    while (run_test(body, menu, stats, word_list, word_options, selected_idx))
+    {
+    }
 
     delwin(header);
     delwin(body);
+    delwin(menu);
     delwin(stats);
 
     endwin();
