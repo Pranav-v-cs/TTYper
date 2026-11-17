@@ -4,8 +4,12 @@
 #include <fstream>
 #include <vector>
 #include <random>
+#include <chrono>
 
-struct Cell {
+using Clock = std::chrono::steady_clock;
+
+struct Cell
+{
     int row;
     int col;
     char expected;
@@ -64,6 +68,21 @@ void load_words(std::vector<std::string> &word_list, const std::string &filepath
     }
 }
 
+void update_stats(WINDOW *stats, int time_left, int correct_chars, int elapsed_seconds)
+{
+    werase(stats);
+    box(stats, 0, 0);
+
+    int wpm = 0;
+    if (elapsed_seconds > 0)
+    {
+        wpm = (correct_chars / 5) * 60 / elapsed_seconds;
+    }
+
+    mvwprintw(stats, 1, 2, "Time: %2ds  |  WPM: %3d  |  ESC to quit", time_left, wpm);
+    wrefresh(stats);
+}
+
 WINDOW *create_header(std::string heading)
 {
     WINDOW *header = newwin(3, COLS - 5, 1, 2);
@@ -77,10 +96,10 @@ WINDOW *create_header(std::string heading)
     return header;
 }
 
-WINDOW *create_body(const std::vector<std::string> &word_list)
+WINDOW *create_body(const std::vector<std::string> &word_list, float &wpm, float &accuracy, double &elapsed_time)
 {
     std::vector<std::string> body_content;
-    int word_count = 100;
+    int word_count = 10;
     get_random_words(body_content, word_list, word_count);
 
     const int body_height = (LINES - 10) / 2;
@@ -105,13 +124,15 @@ WINDOW *create_body(const std::vector<std::string> &word_list)
             row++;
             col = col_lb;
         }
-        for (char c : current_word) {
+        for (char c : current_word)
+        {
             mvwaddch(body, row, col, c);
             cells.push_back({row, col, c});
             col++;
         }
 
-        if (i + 1 < word_count && col < col_ub) {
+        if (i + 1 < word_count && col < col_ub)
+        {
             mvwaddch(body, row, col, ' ');
             cells.push_back({row, col, ' '});
             col++;
@@ -120,8 +141,13 @@ WINDOW *create_body(const std::vector<std::string> &word_list)
     wattroff(body, A_DIM);
 
     size_t cursor = 0;
-    wmove(body, row, col);
+    wmove(body, cells[cursor].row, cells[cursor].col);
     wrefresh(body);
+
+    bool started = false;
+    Clock::time_point start_time;
+    int correct_chars = 0;
+    int total_typed = 0;
 
     int ch;
     while ((ch = getch()) != 27 && cursor < cells.size())
@@ -131,7 +157,7 @@ WINDOW *create_body(const std::vector<std::string> &word_list)
             if (cursor > 0)
             {
                 cursor--;
-                const Cell& prev = cells[cursor];
+                const Cell &prev = cells[cursor];
                 wattron(body, A_DIM);
                 mvwaddch(body, prev.row, prev.col, prev.expected);
                 wattroff(body, A_DIM);
@@ -140,20 +166,43 @@ WINDOW *create_body(const std::vector<std::string> &word_list)
         }
         else if (isprint(ch))
         {
-            const Cell& curr = cells[cursor];
-            if (ch == curr.expected) {
+            if (!started)
+            {
+                started = true;
+                start_time = Clock::now();
+            }
+
+            total_typed++;
+            const Cell &curr = cells[cursor];
+            if (ch == curr.expected)
+            {
                 wattron(body, COLOR_PAIR(1));
                 mvwaddch(body, curr.row, curr.col, curr.expected);
                 wattroff(body, COLOR_PAIR(1));
-            } else {
+                correct_chars++;
+            }
+            else
+            {
                 wattron(body, COLOR_PAIR(2));
                 mvwaddch(body, curr.row, curr.col, curr.expected);
                 wattroff(body, COLOR_PAIR(2));
             }
             cursor++;
 
-            if (cursor < cells.size()) {
+            if (cursor < cells.size())
+            {
                 wmove(body, cells[cursor].row, cells[cursor].col);
+            }
+            if (cursor == cells.size() - 1)
+            {
+                auto end_time = Clock::now();
+
+                double elapsed_sec = std::chrono::duration<double>(end_time - start_time).count();
+                double minutes = elapsed_sec / 60.0;
+
+                wpm = (minutes > 0) ? static_cast<float>((correct_chars / 5.0) / minutes) : 0.0f;
+                accuracy = (total_typed > 0) ? (correct_chars * 100.0f) / total_typed : 100.0f;
+                elapsed_time = elapsed_sec;
             }
         }
         wrefresh(body);
@@ -161,11 +210,11 @@ WINDOW *create_body(const std::vector<std::string> &word_list)
     return body;
 }
 
-WINDOW *create_stats()
+WINDOW *create_stats(const float wpm, const float accuracy, const double time)
 {
-    WINDOW *stats = newwin(3, COLS - 5, LINES - 5, 2);
+    WINDOW *stats = newwin(3, (COLS / 2), LINES - 5, 2);
     refresh();
-    mvwprintw(stats, 1, 1, "Stats here...");
+    mvwprintw(stats, 1, 1, "WPM: %.2f  |   Accuracy: %.2f   |   Elapsed Time: %.2f", wpm, accuracy, time);
     box(stats, 0, 0);
     wrefresh(stats);
     return stats;
@@ -173,6 +222,8 @@ WINDOW *create_stats()
 
 int main()
 {
+    float wpm = 0.0f, accuracy = 0.0f;
+    double elapsed_time = 0.0f;
     std::vector<std::string> word_list;
     word_list.reserve(1000);
 
@@ -190,9 +241,13 @@ int main()
 
     WINDOW *header = create_header(heading);
 
-    WINDOW *stats = create_stats();
+    WINDOW *stats = create_stats(wpm, accuracy, elapsed_time);
 
-    WINDOW *body = create_body(word_list);
+    WINDOW *body = create_body(word_list, wpm, accuracy, elapsed_time);
+
+    stats = create_stats(wpm, accuracy, elapsed_time);
+
+    getch();
 
     delwin(header);
     delwin(body);
