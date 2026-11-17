@@ -6,6 +6,8 @@
 #include <random>
 #include <chrono>
 #include <cstdio>
+#include <algorithm>
+#include <clocale>
 
 using Clock = std::chrono::steady_clock;
 
@@ -19,6 +21,7 @@ struct Cell
 
 void init_window()
 {
+    setlocale(LC_ALL, "");
     initscr();
     raw();
     noecho();
@@ -96,10 +99,9 @@ void update_menu(WINDOW *menu, const std::vector<int> &options, int selected_idx
             mvwprintw(menu, 1, col, " %d ", options[i]);
             wattroff(menu, A_DIM);
         }
-        col += std::to_string(options[i]).length() + 3;
+        col += static_cast<int>(std::to_string(options[i]).length()) + 3;
     }
 
-    // Right-aligned hint for toggling word counts
     int width = getmaxx(menu);
     const char *hint = "LEFT/RIGHT or 1-4: Change Words";
     int hint_col = width - static_cast<int>(std::string(hint).length()) - 2;
@@ -111,6 +113,31 @@ void update_menu(WINDOW *menu, const std::vector<int> &options, int selected_idx
     }
 
     wrefresh(menu);
+}
+
+bool handle_menu_toggle(int ch, const std::vector<int> &word_options, int &selected_idx)
+{
+    int n = static_cast<int>(word_options.size());
+    if (ch == KEY_LEFT)
+    {
+        selected_idx = (selected_idx - 1 + n) % n;
+        return true;
+    }
+    if (ch == KEY_RIGHT)
+    {
+        selected_idx = (selected_idx + 1) % n;
+        return true;
+    }
+    if (ch >= '1' && ch <= '4')
+    {
+        int idx = ch - '1';
+        if (idx < n && idx != selected_idx)
+        {
+            selected_idx = idx;
+            return true;
+        }
+    }
+    return false;
 }
 
 void update_stats(WINDOW *stats, float wpm, float acc, double time, bool finished = false)
@@ -153,14 +180,52 @@ void update_stats(WINDOW *stats, float wpm, float acc, double time, bool finishe
     wrefresh(stats);
 }
 
+void draw_progress(WINDOW *body, size_t current, size_t total, int words_done, int total_words)
+{
+    int width = getmaxx(body);
+    int bar_width = width - 16;
+    if (bar_width < 10) return;
+
+    float ratio = (total > 0) ? static_cast<float>(current) / total : 0.0f;
+
+    int half_steps = static_cast<int>(ratio * bar_width * 2);
+    int full_blocks = half_steps / 2;
+    bool has_half = (half_steps % 2) == 1;
+
+    wmove(body, 1, 2);
+
+    wattron(body, COLOR_PAIR(3) | A_BOLD);
+    for (int i = 0; i < full_blocks; ++i)
+    {
+        waddstr(body, "━");
+    }
+
+    int drawn = full_blocks;
+    if (has_half && drawn < bar_width)
+    {
+        waddstr(body, "╸");
+        drawn++;
+    }
+    wattroff(body, COLOR_PAIR(3) | A_BOLD);
+
+    wattron(body, A_DIM);
+    for (int i = drawn; i < bar_width; ++i)
+    {
+        waddstr(body, "─");
+    }
+    wattroff(body, A_DIM);
+
+    mvwprintw(body, 1, 2 + bar_width + 1, "%3d/%-3d", words_done, total_words);
+}
+
 WINDOW *create_header(const std::string &heading)
 {
     WINDOW *header = newwin(3, COLS - 5, 1, 2);
     refresh();
-    wattron(header, COLOR_PAIR(3));
-    mvwprintw(header, 1, ((COLS / 2) - (heading.length() / 2)), "%s", heading.c_str());
+    wattron(header, COLOR_PAIR(3) | A_BOLD);
+    mvwprintw(header, 1, ((COLS / 2) - (static_cast<int>(heading.length()) / 2)), "%s", heading.c_str());
     box(header, 0, 0);
-    wattroff(header, COLOR_PAIR(3));
+    wattroff(header, COLOR_PAIR(3) | A_BOLD);
     wrefresh(header);
     return header;
 }
@@ -168,8 +233,9 @@ WINDOW *create_header(const std::string &heading)
 bool run_test(WINDOW *body, WINDOW *menu, WINDOW *stats, const std::vector<std::string> &word_list,
               const std::vector<int> &word_options, int &selected_idx)
 {
+    curs_set(1);
+    const int body_height = getmaxy(body);
     const int body_width = getmaxx(body);
-    const int row_lb = 2, col_lb = 4, col_ub = body_width - 4;
     const int word_count = word_options[selected_idx];
 
     std::vector<std::string> body_content;
@@ -180,68 +246,83 @@ bool run_test(WINDOW *body, WINDOW *menu, WINDOW *stats, const std::vector<std::
     update_menu(menu, word_options, selected_idx);
     update_stats(stats, 0.0f, 0.0f, 0.0);
 
-    int row = row_lb, col = col_lb;
-    std::vector<Cell> cells;
+    // Group words into ~65-char lines for centered rendering
+    const int max_line_width = std::min(65, body_width - 8);
+    std::vector<std::string> lines;
+    std::string current_line;
 
-    wattron(body, A_DIM);
     for (int i = 0; i < word_count; i++)
     {
-        const std::string &current_word = body_content[i];
-        if (col + static_cast<int>(current_word.length()) + 1 > col_ub)
+        const std::string &word = body_content[i];
+        if (current_line.empty())
         {
-            row++;
-            col = col_lb;
+            current_line = word;
         }
-        for (char c : current_word)
+        else if (static_cast<int>(current_line.length() + 1 + word.length()) <= max_line_width)
         {
-            mvwaddch(body, row, col, c);
-            cells.push_back({row, col, c, false});
-            col++;
+            current_line += " " + word;
+        }
+        else
+        {
+            lines.push_back(current_line);
+            current_line = word;
+        }
+    }
+    if (!current_line.empty())
+    {
+        lines.push_back(current_line);
+    }
+
+    int total_lines = static_cast<int>(lines.size());
+    int start_row = std::max(3, (body_height - total_lines) / 2);
+    int start_col = std::max(4, (body_width - max_line_width) / 2);
+
+    std::vector<Cell> cells;
+    wattron(body, A_DIM);
+
+    for (int r = 0; r < total_lines; r++)
+    {
+        int draw_row = start_row + r;
+        if (draw_row >= body_height - 1)
+        {
+            break;
         }
 
-        if (i + 1 < word_count && col < col_ub)
+        const std::string &line = lines[r];
+        for (size_t c = 0; c < line.length(); c++)
         {
-            mvwaddch(body, row, col, ' ');
-            cells.push_back({row, col, ' ', false});
-            col++;
+            int draw_col = start_col + static_cast<int>(c);
+            mvwaddch(body, draw_row, draw_col, line[c]);
+            cells.push_back({draw_row, draw_col, line[c], false});
+        }
+
+        if (r + 1 < total_lines)
+        {
+            int space_col = start_col + static_cast<int>(line.length());
+            mvwaddch(body, draw_row, space_col, ' ');
+            cells.push_back({draw_row, space_col, ' ', false});
         }
     }
     wattroff(body, A_DIM);
 
+    if (cells.empty())
+    {
+        return false;
+    }
+
+    draw_progress(body, 0, cells.size(), 0, word_count);
+
     size_t cursor = 0;
-    wmove(body, cells[cursor].row, cells[cursor].col);
+    wmove(body, cells[0].row, cells[0].col);
     wrefresh(body);
 
     bool started = false;
     Clock::time_point start_time;
     int correct_chars = 0;
     int total_typed = 0;
+    int words_done = 0;
     float wpm = 0.0f, accuracy = 0.0f;
     double elapsed_time = 0.0;
-
-    auto handle_menu_toggle = [&](int ch) -> bool {
-        int n = static_cast<int>(word_options.size());
-        if (ch == KEY_LEFT)
-        {
-            selected_idx = (selected_idx - 1 + n) % n;
-            return true;
-        }
-        if (ch == KEY_RIGHT)
-        {
-            selected_idx = (selected_idx + 1) % n;
-            return true;
-        }
-        if (ch >= '1' && ch <= '4')
-        {
-            int idx = ch - '1';
-            if (idx < n && idx != selected_idx)
-            {
-                selected_idx = idx;
-                return true;
-            }
-        }
-        return false;
-    };
 
     int ch;
     while (cursor < cells.size())
@@ -252,9 +333,9 @@ bool run_test(WINDOW *body, WINDOW *menu, WINDOW *stats, const std::vector<std::
         {
             return false;
         }
-        if (ch == '\t' || handle_menu_toggle(ch))
+        if (ch == '\t' || handle_menu_toggle(ch, word_options, selected_idx))
         {
-            return true; // Immediately restart with the newly selected word count
+            return true;
         }
 
         if (ch == KEY_BACKSPACE || ch == 127 || ch == '\b')
@@ -263,6 +344,10 @@ bool run_test(WINDOW *body, WINDOW *menu, WINDOW *stats, const std::vector<std::
             {
                 cursor--;
                 Cell &prev = cells[cursor];
+                if (prev.expected == ' ')
+                {
+                    words_done--;
+                }
                 if (prev.was_correct)
                 {
                     correct_chars--;
@@ -271,6 +356,8 @@ bool run_test(WINDOW *body, WINDOW *menu, WINDOW *stats, const std::vector<std::
                 wattron(body, A_DIM);
                 mvwaddch(body, prev.row, prev.col, prev.expected);
                 wattroff(body, A_DIM);
+
+                draw_progress(body, cursor, cells.size(), words_done, word_count);
                 wmove(body, prev.row, prev.col);
             }
         }
@@ -302,6 +389,13 @@ bool run_test(WINDOW *body, WINDOW *menu, WINDOW *stats, const std::vector<std::
             }
             cursor++;
 
+            if (curr.expected == ' ' || cursor == cells.size())
+            {
+                words_done++;
+            }
+
+            draw_progress(body, cursor, cells.size(), words_done, word_count);
+
             auto now = Clock::now();
             elapsed_time = std::chrono::duration<double>(now - start_time).count();
             double minutes = elapsed_time / 60.0;
@@ -320,7 +414,6 @@ bool run_test(WINDOW *body, WINDOW *menu, WINDOW *stats, const std::vector<std::
         wrefresh(body);
     }
 
-    // Post-test prompt: allow toggling word count, restarting, or quitting
     while (true)
     {
         ch = getch();
@@ -328,47 +421,39 @@ bool run_test(WINDOW *body, WINDOW *menu, WINDOW *stats, const std::vector<std::
         {
             return false;
         }
-        if (ch == '\t' || ch == '\n' || ch == KEY_ENTER || handle_menu_toggle(ch))
+        if (ch == '\t' || ch == '\n' || ch == KEY_ENTER || handle_menu_toggle(ch, word_options, selected_idx))
         {
             return true;
         }
     }
+    curs_set(0);
 }
-
 int main()
 {
     std::vector<std::string> word_list;
     word_list.reserve(1000);
-
     const std::string filepath = "data/word_list.csv";
     const std::string heading = "TTYper - Terminal Based Typing Practice and Test";
-
     load_words(word_list, filepath);
     if (word_list.empty())
     {
         return 1;
     }
-
     init_window();
-
     const std::vector<int> word_options = {10, 25, 50, 100};
     int selected_idx = 0;
-
     WINDOW *header = create_header(heading);
     WINDOW *body = newwin(LINES - 14, COLS - 5, 5, 2);
     WINDOW *menu = newwin(3, COLS - 5, LINES - 8, 2);
     WINDOW *stats = newwin(3, COLS - 5, LINES - 5, 2);
     refresh();
-
     while (run_test(body, menu, stats, word_list, word_options, selected_idx))
     {
     }
-
     delwin(header);
     delwin(body);
     delwin(menu);
     delwin(stats);
-
     endwin();
     return 0;
 }
