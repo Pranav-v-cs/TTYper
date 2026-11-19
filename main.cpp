@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <algorithm>
 #include <clocale>
+#include <cstdlib> 
 
 using Clock = std::chrono::steady_clock;
 
@@ -430,9 +431,11 @@ bool run_test(WINDOW *body, WINDOW *menu, WINDOW *stats, const std::vector<std::
 }
 int main()
 {
+    const char *home = std::getenv("HOME");
+    std::string filepath = home ? std::string(home) + "/.ttyper/word_list.csv" : "data/word_list.csv";
+
     std::vector<std::string> word_list;
     word_list.reserve(1000);
-    const std::string filepath = "data/word_list.csv";
     const std::string heading = "TTYper - Terminal Based Typing Practice and Test";
     load_words(word_list, filepath);
     if (word_list.empty())
