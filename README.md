@@ -1,6 +1,6 @@
 # TTYper
 
-A terminal-based typing practice and test tool built with C++ and ncurses. Type randomly generated word sequences, track your speed and accuracy in real time, and retry as many times as you like — all without leaving the terminal.
+A terminal-based typing practice and test tool built with C++ and ncurses. Practice typing, track your speed and accuracy in real time, and retry as many times as you like — all without leaving the terminal.
 
 ## Features
 
@@ -9,8 +9,6 @@ A terminal-based typing practice and test tool built with C++ and ncurses. Type 
 - Live WPM, accuracy, elapsed time, and word progress
 - Visual feedback: correct characters in green, errors in red (mistyped spaces are highlighted)
 - Progress bar with half-step granularity
-- Backspace support to correct mistakes
-- Simple ncurses TUI with separate header, word area, settings menu, and stats bar
 
 ## Installation
 
@@ -117,8 +115,6 @@ rm -rf TTYper
 - **WPM** = (correct characters / 5) / elapsed minutes, counted only after the first keypress.
 - **Accuracy** = (correct characters / total characters typed) × 100.
 - **Time** = seconds elapsed since the first printable keystroke.
-
-Correcting a mistake with Backspace also rolls back the corresponding correct-character and word counts.
 
 ## Project Structure
 
